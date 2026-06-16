@@ -133,8 +133,8 @@ def _load_file_api_module(monkeypatch):
         True,
         SimpleNamespace(parent_id="bucket1", location="path1", name="doc.txt", type="doc"),
     )
-    file_api_service_mod.get_parent_folder = lambda _file_id: (True, {"parent_folder": {"id": "parent1"}})
-    file_api_service_mod.get_all_parent_folders = lambda _file_id: (True, {"parent_folders": [{"id": "root"}]})
+    file_api_service_mod.get_parent_folder = lambda _file_id, user_id=None: (True, {"parent_folder": {"id": "parent1"}})
+    file_api_service_mod.get_all_parent_folders = lambda _file_id, user_id=None: (True, {"parent_folders": [{"id": "root"}]})
     monkeypatch.setitem(sys.modules, "api.apps.services.file_api_service", file_api_service_mod)
     services_pkg.file_api_service = file_api_service_mod
 
@@ -325,6 +325,22 @@ def test_download_falls_back_to_document_storage(monkeypatch):
     assert res.data == b"fallback-blob"
     assert res.headers["content_type"] == "text/plain"
     assert res.headers["ext"] == "txt"
+
+
+@pytest.mark.p2
+def test_download_missing_blob_returns_error(monkeypatch):
+    module = _load_file_api_module(monkeypatch)
+    storage_calls = []
+
+    def _get(bucket, location):
+        storage_calls.append((bucket, location))
+        return None
+
+    monkeypatch.setattr(module.settings, "STORAGE_IMPL", SimpleNamespace(get=_get))
+    res = _run(module.download("tenant1", "file1"))
+
+    assert storage_calls == [("bucket1", "path1"), ("bucket2", "path2")]
+    assert res["message"] == "This file is empty."
 
 
 @pytest.mark.p2

@@ -19,7 +19,8 @@ from peewee import OperationalError
 from quart import request
 from common.constants import RetCode
 from api.apps import login_required, current_user
-from api.utils.api_utils import get_error_argument_result, get_error_data_result, get_result, add_tenant_id_to_kwargs
+from api.utils.api_utils import get_error_argument_result, get_error_data_result, get_json_result, get_result, add_tenant_id_to_kwargs
+from api.utils.pagination_utils import validate_rest_api_page_size
 from api.utils.validation_utils import (
     CreateDatasetReq,
     DeleteDatasetReq,
@@ -148,6 +149,8 @@ async def create(tenant_id: str = None):
             return get_result(data=result)
         else:
             return get_error_data_result(message=result)
+    except LookupError as e:
+        return get_error_argument_result(str(e))
     except ValueError as e:
         return get_error_argument_result(str(e))
     except Exception as e:
@@ -494,17 +497,11 @@ async def search_datasets(tenant_id):
     req, err = await validate_and_parse_json_request(request, SearchDatasetsReq)
     if err is not None:
         return get_error_argument_result(err)
-    try:
-        success, result = await dataset_api_service.search_datasets(tenant_id, req)
-        if success:
-            return get_result(data=result)
-        else:
-            return get_error_data_result(message=result)
-    except Exception as e:
-        logging.exception(e)
-        if "not_found" in str(e):
-            return get_error_data_result(message="No chunk found! Check the chunk status please!")
-        return get_error_data_result(message="Internal server error")
+    success, result = await dataset_api_service.search_datasets(tenant_id, req)
+    if success:
+        return get_result(data=result)
+    else:
+        return get_error_data_result(message=result)
 
 
 @manager.route("/datasets/<dataset_id>/search", methods=["POST"])  # noqa: F821
@@ -559,21 +556,6 @@ async def get_knowledge_graph(tenant_id, dataset_id):
         return get_error_data_result(message="Internal server error")
 
 
-@manager.route("/datasets/<dataset_id>/graph", methods=["DELETE"])  # noqa: F821
-@login_required
-@add_tenant_id_to_kwargs
-def delete_knowledge_graph(tenant_id, dataset_id):
-    try:
-        success, result = dataset_api_service.delete_knowledge_graph(dataset_id, tenant_id)
-        if success:
-            return get_result(data=result)
-        else:
-            return get_result(data=False, message=result, code=RetCode.AUTHENTICATION_ERROR)
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(message="Internal server error")
-
-
 @manager.route("/datasets/<dataset_id>/index", methods=["POST"])  # noqa: F821
 @login_required
 @add_tenant_id_to_kwargs
@@ -613,14 +595,15 @@ def trace_index(tenant_id, dataset_id):
 
 
 @manager.route("/datasets/<dataset_id>/<index_type>", methods=["DELETE"])  # noqa: F821
+@manager.route("/datasets/<dataset_id>/index", methods=["DELETE"])  # noqa: F821
 @login_required
 @add_tenant_id_to_kwargs
-def delete_index(tenant_id, dataset_id, index_type):
-    index_type = index_type.lower()
+def delete_index(tenant_id, dataset_id, index_type=None):
+    index_type = (index_type or request.args.get("type", "")).lower()
     if index_type not in dataset_api_service._VALID_INDEX_TYPES:
         return get_error_argument_result(f"Invalid index type '{index_type}'")
     # `wipe` controls whether the persisted index artefacts (graph rows /
-    # raptor summaries) are removed.  Default true preserves historical
+    # raptor summaries) are removed. Default true preserves historical
     # behaviour; pass wipe=false to cancel the running task while keeping
     # prior progress so it can be resumed later.
     wipe_arg = (request.args.get("wipe", "true") or "true").strip().lower()
@@ -653,13 +636,33 @@ async def run_embedding(tenant_id, dataset_id):
         return get_error_data_result(message="Internal server error")
 
 
+@manager.route("/datasets/<dataset_id>/embedding/check", methods=["POST"])  # noqa: F821
+@login_required
+@add_tenant_id_to_kwargs
+async def check_embedding(tenant_id, dataset_id):
+    try:
+        req = await request.get_json()
+        if not req or not req.get("embd_id"):
+            return get_error_data_result(message="`embd_id` is required.")
+        status, result = dataset_api_service.check_embedding(dataset_id, tenant_id, req)
+        if status is True:
+            return get_result(data=result)
+        elif status == "not_effective":
+            return get_json_result(code=result["code"], message=result["message"], data=result["data"])
+        else:
+            return get_error_data_result(message=result)
+    except Exception as e:
+        logging.exception(e)
+        return get_error_data_result(message="Internal server error")
+
+
 @manager.route("/datasets/<dataset_id>/ingestions", methods=["GET"])  # noqa: F821
 @login_required
 @add_tenant_id_to_kwargs
 def list_ingestion_logs(tenant_id, dataset_id):
     try:
         page = int(request.args.get("page", 0))
-        page_size = int(request.args.get("page_size", 0))
+        page_size = validate_rest_api_page_size(int(request.args.get("page_size", 0)))
         orderby = request.args.get("orderby", "create_time")
         desc = request.args.get("desc", "true").lower() != "false"
         operation_status = request.args.getlist("operation_status")

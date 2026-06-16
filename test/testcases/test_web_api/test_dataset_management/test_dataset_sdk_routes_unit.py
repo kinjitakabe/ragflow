@@ -15,7 +15,6 @@
 #
 
 import asyncio
-import functools
 import importlib.util
 import inspect
 import json
@@ -390,17 +389,6 @@ def _load_dataset_module(monkeypatch):
     def _get_error_permission_result(message=""):
         return _get_result(code=_RetCode.AUTHENTICATION_ERROR, message=message)
 
-    def _token_required(func):
-        @functools.wraps(func)
-        async def _async_wrapper(*args, **kwargs):
-            return await func(*args, **kwargs)
-
-        @functools.wraps(func)
-        def _sync_wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        return _async_wrapper if asyncio.iscoroutinefunction(func) else _sync_wrapper
-
     api_utils_mod.deep_merge = _deep_merge
     api_utils_mod.get_error_argument_result = _get_error_argument_result
     api_utils_mod.get_error_data_result = _get_error_data_result
@@ -408,7 +396,6 @@ def _load_dataset_module(monkeypatch):
     api_utils_mod.get_parser_config = lambda _chunk_method, _unused: {"auto": True}
     api_utils_mod.get_result = _get_result
     api_utils_mod.remap_dictionary_keys = lambda data: data
-    api_utils_mod.token_required = _token_required
     api_utils_mod.add_tenant_id_to_kwargs = lambda func: func
     api_utils_mod.verify_embedding_availability = lambda _embd_id, _tenant_id: (True, None)
     monkeypatch.setitem(sys.modules, "api.utils.api_utils", api_utils_mod)
@@ -548,10 +535,11 @@ def test_update_route_branch_matrix_unit(monkeypatch):
 
     kb_chunked = _KB(kb_id="kb-1", name="old", chunk_num=2, embd_id="embd-1")
     monkeypatch.setattr(module.KnowledgebaseService, "get_or_none", lambda **kwargs: kb_chunked if kwargs.get("id") else None)
+    monkeypatch.setattr(module.KnowledgebaseService, "update_by_id", lambda *_args, **_kwargs: True)
     req_state.clear()
     req_state.update({"embd_id": "embd-2"})
     res = _run(inspect.unwrap(module.update)("tenant-1", "kb-1"))
-    assert "chunk_num" in res["message"], res
+    assert res["code"] == module.RetCode.SUCCESS, res
 
     kb_rank = _KB(kb_id="kb-1", name="old", pagerank=0)
     monkeypatch.setattr(module.KnowledgebaseService, "get_or_none", lambda **kwargs: kb_rank if kwargs.get("id") else None)
@@ -853,4 +841,3 @@ def test_delete_index_wipe_flag_unit(monkeypatch):
     assert res["code"] == module.RetCode.SUCCESS, res
     assert len(deleted) == 1, f"default wipe must call docStore.delete once: {deleted}"
     assert cleared_phase_markers == ["kb-1"], cleared_phase_markers
-

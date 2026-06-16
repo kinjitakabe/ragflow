@@ -213,11 +213,17 @@ func (s *FileService) fileInfoToResponse(info *FileInfo) map[string]interface{} 
 	return result
 }
 
-// GetParentFolder gets parent folder of a file
-func (s *FileService) GetParentFolder(fileID string) (map[string]interface{}, error) {
-	// Check if file exists
-	if _, err := s.fileDAO.GetByID(fileID); err != nil {
+// GetParentFolder gets parent folder of a file with permission check
+func (s *FileService) GetParentFolder(userID, fileID string) (map[string]interface{}, error) {
+	// Get file
+	file, err := s.fileDAO.GetByID(fileID)
+	if err != nil {
 		return nil, err
+	}
+
+	// Permission check
+	if !s.checkFileTeamPermission(file, userID) {
+		return nil, fmt.Errorf("No authorization.")
 	}
 
 	// Get parent folder
@@ -229,11 +235,17 @@ func (s *FileService) GetParentFolder(fileID string) (map[string]interface{}, er
 	return s.toFileResponse(parentFolder), nil
 }
 
-// GetAllParentFolders gets all parent folders in path
-func (s *FileService) GetAllParentFolders(fileID string) ([]map[string]interface{}, error) {
-	// Check if file exists
-	if _, err := s.fileDAO.GetByID(fileID); err != nil {
+// GetAllParentFolders gets all parent folders in path with permission check
+func (s *FileService) GetAllParentFolders(userID, fileID string) ([]map[string]interface{}, error) {
+	// Get file
+	file, err := s.fileDAO.GetByID(fileID)
+	if err != nil {
 		return nil, err
+	}
+
+	// Permission check
+	if !s.checkFileTeamPermission(file, userID) {
+		return nil, fmt.Errorf("No authorization.")
 	}
 
 	// Get all parent folders
@@ -363,7 +375,7 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 			Name:       uniqueName,
 			Location:   &location,
 			Size:       int64(len(data)),
-			Type:       fileType,
+			Type:       string(fileType),
 			SourceType: "",
 		}
 
@@ -614,7 +626,7 @@ func (s *FileService) deleteSingleFile(ctx context.Context, file *entity.File) e
 				}
 
 				// Delete document record
-				if err := documentDAO.Delete(docID); err != nil {
+				if _, err := documentDAO.Delete(docID); err != nil {
 					common.Logger.Error(fmt.Sprintf("Fail to delete document: %s, error: %v", docID, err))
 				}
 			}
@@ -650,7 +662,7 @@ func (s *FileService) deleteDocumentFromEngine(ctx context.Context, doc *entity.
 	reqCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 	condition := map[string]interface{}{"doc_id": doc.ID}
-	if _, err := docEngine.Delete(reqCtx, condition, indexName, doc.KbID); err != nil {
+	if _, err := docEngine.DeleteChunks(reqCtx, condition, indexName, doc.KbID); err != nil {
 		return fmt.Errorf("delete document from engine: %w", err)
 	}
 	return nil
@@ -978,4 +990,21 @@ func (s *FileService) GetStorageAddress(fileID string) (*StorageAddress, error) 
 		Bucket: doc.KbID,
 		Name:   *doc.Location,
 	}, nil
+}
+
+// DownloadAgentFile downloads an agent-generated file directly from MinIO without querying the database.
+func (s *FileService) DownloadAgentFile(tenantID, location string) ([]byte, error) {
+	storageImpl := storage.GetStorageFactory().GetStorage()
+	if storageImpl == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	bucketName := fmt.Sprintf("%s-downloads", tenantID)
+
+	blob, err := storageImpl.Get(bucketName, location)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file from storage: %w", err)
+	}
+
+	return blob, nil
 }

@@ -299,6 +299,13 @@ async def download(tenant_id: str = None, file_id: str = None):
         if not blob:
             b, n = File2DocumentService.get_storage_address(file_id=file_id)
             blob = await thread_pool_exec(settings.STORAGE_IMPL.get, b, n)
+        if not blob:
+            logging.warning(
+                "Download failed: empty blob after primary+fallback lookup (tenant_id=%s, file_id=%s)",
+                tenant_id,
+                file_id,
+            )
+            return get_error_data_result(message="This file is empty.")
 
         response = await make_response(blob)
         ext = re.search(r"\.([^.]+)$", file.name.lower())
@@ -335,7 +342,7 @@ async def parent_folder(tenant_id: str = None, file_id: str = None):
         description: Parent folder information.
     """
     try:
-        success, result = file_api_service.get_parent_folder(file_id)
+        success, result = file_api_service.get_parent_folder(file_id, user_id=tenant_id)
         if success:
             return get_result(data=result)
         else:
@@ -366,7 +373,7 @@ async def ancestors(tenant_id: str = None, file_id: str = None):
         description: List of ancestor folders.
     """
     try:
-        success, result = file_api_service.get_all_parent_folders(file_id)
+        success, result = file_api_service.get_all_parent_folders(file_id, user_id=tenant_id)
         if success:
             return get_result(data=result)
         else:
